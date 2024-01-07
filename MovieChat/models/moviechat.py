@@ -34,8 +34,8 @@ class MovieChat(Blip2Base):
     }
 
     @classmethod
-    def init_video_Qformer(cls, num_query_token, vision_width,num_hidden_layers =2):
-        encoder_config = BertConfig.from_pretrained("bert-base-uncased")
+    def init_video_Qformer(cls, num_query_token, vision_width,num_hidden_layers =2, bert_ckpt=""):
+        encoder_config = BertConfig.from_pretrained(bert_ckpt) if bert_ckpt else BertConfig.from_pretrained("bert-base-uncased")
         encoder_config.num_hidden_layers = num_hidden_layers
         encoder_config.encoder_width = vision_width
         # insert cross-attention layer every other block
@@ -79,10 +79,11 @@ class MovieChat(Blip2Base):
         short_memory_merge = 2,
         Qformer_input = 8,
         n_position = 16,
+        bert_ckpt="",
     ):
         super().__init__()
 
-        self.tokenizer = self.init_tokenizer()
+        self.tokenizer = self.init_tokenizer(bert_ckpt=bert_ckpt)
         self.low_resource = low_resource
 
         print('Loading VIT')
@@ -98,12 +99,12 @@ class MovieChat(Blip2Base):
                 param.requires_grad = False
             self.ln_vision = self.ln_vision.eval()
             self.ln_vision.train = disabled_train
-            logging.info("freeze vision encoder")
+            print("freeze vision encoder")
         print('Loading VIT Done')
 
         print('Loading Q-Former')
         self.Qformer, self.query_tokens = self.init_Qformer(
-            num_query_token, self.visual_encoder.num_features
+            num_query_token, self.visual_encoder.num_features, bert_ckpt=bert_ckpt
         )
         self.Qformer.cls = None
         self.Qformer.bert.embeddings.word_embeddings = None
@@ -119,10 +120,10 @@ class MovieChat(Blip2Base):
             self.Qformer = self.Qformer.eval()
             self.Qformer.train = disabled_train
             self.query_tokens.requires_grad = False
-            logging.info("freeze Qformer")
-        logging.info('Loading Q-Former Done')
+            print("freeze Qformer")
+        print('Loading Q-Former Done')
 
-        logging.info('Loading LLAMA Tokenizer')
+        print('Loading LLAMA Tokenizer')
         self.llama_tokenizer = LlamaTokenizer.from_pretrained(llama_model, use_fast=False)
         if self.llama_tokenizer.pad_token is None:
             self.llama_tokenizer.pad_token = self.llama_tokenizer.eos_token 
@@ -134,7 +135,7 @@ class MovieChat(Blip2Base):
         self.IMAGE_PATCH_TOKEN_ID = self.llama_tokenizer.get_vocab()[DEFAULT_IMAGE_PATCH_TOKEN]
         self.AUDIO_PATCH_TOKEN_ID = self.llama_tokenizer.get_vocab()[DEFAULT_AUDIO_PATCH_TOKEN]
 
-        logging.info('Loading LLAMA Model')
+        print('Loading LLAMA Model')
         if self.low_resource:
             self.llama_model = LlamaForCausalLM.from_pretrained(
                 llama_model,
@@ -150,10 +151,10 @@ class MovieChat(Blip2Base):
 
         for name, param in self.llama_model.named_parameters():
             param.requires_grad = False
-        logging.info('Loading LLAMA Done')
+        print('Loading LLAMA Done')
 
 
-        logging.info('Loading LLAMA proj')
+        print('Loading LLAMA proj')
         self.llama_proj = nn.Linear(
             self.Qformer.config.hidden_size, self.llama_model.config.hidden_size
         )
@@ -166,13 +167,13 @@ class MovieChat(Blip2Base):
             #  todo frozen  llama_proj
             for name, param in self.llama_proj.named_parameters():
                 param.requires_grad = False
-            logging.info('LLAMA proj is frozen')
+            print('LLAMA proj is frozen')
         else:
             for name, param in self.llama_proj.named_parameters():
                 param.requires_grad = True
-            logging.info('LLAMA proj is not frozen')
+            print('LLAMA proj is not frozen')
 
-        logging.info('Loading llama_proj Done')
+        print('Loading llama_proj Done')
 
         self.max_txt_len = max_txt_len
         self.end_sym = end_sym
@@ -192,7 +193,7 @@ class MovieChat(Blip2Base):
 
         self.num_video_query_token = num_video_query_token
         self.video_Qformer,self.video_query_tokens = self.init_video_Qformer(num_query_token = num_video_query_token,\
-            vision_width=self.Qformer.config.hidden_size, num_hidden_layers =2)
+            vision_width=self.Qformer.config.hidden_size, num_hidden_layers =2, bert_ckpt=bert_ckpt)
 
         self.video_Qformer.cls = None
         self.video_Qformer.bert.embeddings.word_embeddings = None
@@ -209,27 +210,27 @@ class MovieChat(Blip2Base):
             for name, param in self.video_frame_position_embedding.named_parameters():
                 param.requires_grad = False
             self.video_query_tokens.requires_grad = False
-            logging.info('video_Qformer is frozen')
+            print('video_Qformer is frozen')
         else:
             for name, param in self.video_Qformer.named_parameters():
                 param.requires_grad = True
             for name, param in self.video_frame_position_embedding.named_parameters():
                 param.requires_grad = True
             self.video_query_tokens.requires_grad = True
-            logging.info('video_Qformer is not frozen')
+            print('video_Qformer is not frozen')
 
         self.Qformer_input = Qformer_input
-        logging.info('create short-memory buffer')
+        print('create short-memory buffer')
         self.short_memory_length = short_memory_length 
         self.short_memory_buffer = []
         self.short_memory_merge = short_memory_merge 
         self.temp_short_memory = []
 
-        logging.info('create long-memory buffer')
+        print('create long-memory buffer')
         self.long_memory_length = long_memory_length 
         self.long_memory_buffer = []
 
-        logging.info('whether Question the whole video')
+        print('whether Question the whole video')
         self.middle_video =False
         self.question_minute = None
         self.question_second = None
@@ -363,7 +364,7 @@ class MovieChat(Blip2Base):
             frame_hidden_state = torch.cat(cur_video, dim=0)
             frame_hidden_state = einops.rearrange(frame_hidden_state, '(b t) q h -> b t q h', b=batch_size, t=len(video_features))
                 
-            frame_hidden_state = cur_position_embeddings + frame_hidden_state 
+            frame_hidden_state = cur_position_embeddings.to(device) + frame_hidden_state.to(device) 
                 
             # frame attention
             frame_hidden_state =  einops.rearrange(frame_hidden_state, 'b t q h -> b (t q) h',b=batch_size,t=len(video_features)) 
@@ -662,6 +663,7 @@ class MovieChat(Blip2Base):
         max_frame_pos = cfg.get("max_frame_pos", 32)
         fusion_head_layers = cfg.get("fusion_head_layers", 2)
         num_video_query_token =  cfg.get("num_video_query_token", 32)
+        bert_ckpt = cfg.get("bert_ckpt")
         model = cls(
             vit_model=vit_model,
             q_former_model=q_former_model,
@@ -685,6 +687,7 @@ class MovieChat(Blip2Base):
             frozen_llama_proj=frozen_llama_proj,
             frozen_video_Qformer=frozen_video_Qformer,
             num_video_query_token=num_video_query_token,
+            bert_ckpt=bert_ckpt,
         )
 
         ckpt_path = cfg.get("ckpt", "")  # load weights of MiniGPT-4
